@@ -46,12 +46,21 @@ def fetch_all_data(portfolio_list):
         "SOX": "^SOX"
     }
     all_to_fetch = list(macro_tickers.values()) + portfolio_list
-    # Download data
-    raw_data = yf.download(all_to_fetch, period="250d", interval="1d")['Close']
-    return raw_data, macro_tickers
+    # Download data with error handling
+    try:
+        raw_data = yf.download(all_to_fetch, period="250d", interval="1d", progress=False)['Close']
+        # Forward fill any NaN values from missing data (pandas 2.0+ compatible)
+        raw_data = raw_data.ffill().bfill()
+        return raw_data, macro_tickers
+    except Exception as e:
+        st.error(f"Failed to fetch data: {e}")
+        return None, macro_tickers
 
 # Load data
 prices, m_map = fetch_all_data(st.session_state.portfolio)
+if prices is None:
+    st.error("Cannot proceed without market data. Please check your tickers and try again.")
+    st.stop()
 
 # --- 4. SIDEBAR MANUAL INPUTS ---
 st.sidebar.divider()
@@ -163,8 +172,18 @@ p_table = []
 for s in st.session_state.portfolio:
     try:
         # Accessing the column directly from the prices dataframe
+        if s not in prices.columns:
+            p_table.append({"Ticker": s, "Current Price": "Ticker not found", "Stop Loss (15%)": "-", "200-DMA": "-", "Status": "❌ Invalid Ticker"})
+            continue
+            
         curr = prices[s].iloc[-1]
         ma200 = prices[s].rolling(200).mean().iloc[-1]
+        
+        # Check for NaN values
+        if pd.isna(curr) or pd.isna(ma200):
+            p_table.append({"Ticker": s, "Current Price": "Data Pending", "Stop Loss (15%)": "-", "200-DMA": "-", "Status": "⏳ No Data"})
+            continue
+            
         stop_loss = curr * 0.85 # 15% Buffer
         
         p_table.append({
@@ -176,7 +195,7 @@ for s in st.session_state.portfolio:
         })
     except Exception as e:
         # If a newly added ticker isn't ready yet
-        p_table.append({"Ticker": s, "Current Price": "Data Pending", "Stop Loss (15%)": "-", "200-DMA": "-", "Status": "Loading..."})
+        p_table.append({"Ticker": s, "Current Price": f"Error: {str(e)}", "Stop Loss (15%)": "-", "200-DMA": "-", "Status": "⚠️ Error"})
 
 st.table(pd.DataFrame(p_table))
 
